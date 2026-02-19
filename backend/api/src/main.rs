@@ -1,10 +1,20 @@
-mod aggregation;
-mod analytics;
-mod error;
+mod audit_handlers;
+mod audit_routes;
+mod benchmark_engine;
+mod benchmark_handlers;
+mod benchmark_routes;
+mod checklist;
+mod detector;
 mod handlers;
-mod rate_limit;
 mod routes;
+mod scoring;
 mod state;
+mod checklist;
+mod detector;
+mod scoring;
+mod audit_handlers;
+mod audit_routes;
+
 
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
@@ -67,6 +77,7 @@ async fn main() -> Result<()> {
         .merge(routes::contract_routes())
         .merge(routes::publisher_routes())
         .merge(routes::health_routes())
+        .merge(routes::migration_routes())
         .fallback(handlers::route_not_found)
         .layer(middleware::from_fn(request_logger))
         .layer(middleware::from_fn_with_state(
