@@ -1,6 +1,10 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{
+        rejection::{JsonRejection, QueryRejection},
+        Path, Query, State,
+    },
     http::StatusCode,
+    response::IntoResponse,
     Json,
 };
 use shared::{
@@ -9,21 +13,75 @@ use shared::{
 };
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{
+    error::{ApiError, ApiResult},
+    state::AppState,
+};
 
-/// Health check endpoint
-pub async fn health_check() -> &'static str {
-    "OK"
+fn db_internal_error(operation: &str, err: sqlx::Error) -> ApiError {
+    tracing::error!(operation = operation, error = ?err, "database operation failed");
+    ApiError::internal("An unexpected database error occurred")
+}
+
+fn map_json_rejection(err: JsonRejection) -> ApiError {
+    ApiError::bad_request("InvalidRequest", format!("Invalid JSON payload: {}", err.body_text()))
+}
+
+fn map_query_rejection(err: QueryRejection) -> ApiError {
+    ApiError::bad_request("InvalidQuery", format!("Invalid query parameters: {}", err.body_text()))
+}
+
+/// Health check — probes DB connectivity and reports uptime.
+/// Returns 200 when everything is reachable, 503 when the database
+/// connection pool cannot satisfy a trivial query.
+pub async fn health_check(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let uptime = state.started_at.elapsed().as_secs();
+    let now = chrono::Utc::now().to_rfc3339();
+
+    // Quick connectivity probe — keeps the query as cheap as possible
+    // so that frequent polling from orchestrators doesn't add load.
+    let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+        .is_ok();
+
+    if db_ok {
+        tracing::info!(uptime_secs = uptime, "health check passed");
+
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "status": "ok",
+                "version": "0.1.0",
+                "timestamp": now,
+                "uptime_secs": uptime
+            })),
+        )
+    } else {
+        tracing::warn!(uptime_secs = uptime, "health check degraded — db unreachable");
+
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "degraded",
+                "version": "0.1.0",
+                "timestamp": now,
+                "uptime_secs": uptime
+            })),
+        )
+    }
 }
 
 /// Get registry statistics
 pub async fn get_stats(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+) -> ApiResult<Json<serde_json::Value>> {
     let total_contracts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM contracts")
         .fetch_one(&state.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| db_internal_error("count contracts", err))?;
 
     let verified_contracts: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM contracts WHERE is_verified = true")
@@ -34,7 +92,7 @@ pub async fn get_stats(
     let total_publishers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publishers")
         .fetch_one(&state.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|err| db_internal_error("count publishers", err))?;
 
     Ok(Json(serde_json::json!({
         "total_contracts": total_contracts,
@@ -46,11 +104,26 @@ pub async fn get_stats(
 /// List and search contracts
 pub async fn list_contracts(
     State(state): State<AppState>,
-    Query(params): Query<ContractSearchParams>,
-) -> Result<Json<PaginatedResponse<Contract>>, StatusCode> {
-    let page = params.page.unwrap_or(1).max(1);
-    let page_size = params.page_size.unwrap_or(20).min(100);
-    let offset = (page - 1) * page_size;
+    params: Result<Query<ContractSearchParams>, QueryRejection>,
+) -> axum::response::Response {
+    let Query(params) = match params {
+        Ok(q) => q,
+        Err(err) => return map_query_rejection(err).into_response(),
+    };
+
+    let page = params.page.unwrap_or(1);
+    let limit = params.limit.unwrap_or(20);
+
+    // bad input, bail early
+    if page < 1 || limit < 1 || limit > 100 {
+        return ApiError::bad_request(
+            "InvalidPagination",
+            "page must be >= 1 and limit must be between 1 and 100",
+        )
+        .into_response();
+    }
+
+    let offset = (page - 1) * limit;
 
     // Build dynamic query based on filters
     let mut query = String::from("SELECT * FROM contracts WHERE 1=1");
@@ -80,15 +153,42 @@ pub async fn list_contracts(
         page_size, offset
     ));
 
-    let contracts: Vec<Contract> = sqlx::query_as(&query)
+    let contracts: Vec<Contract> = match sqlx::query_as(&query)
         .fetch_all(&state.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    {
+        Ok(rows) => rows,
+        Err(err) => return db_internal_error("list contracts", err).into_response(),
+    };
 
-    let total: i64 = sqlx::query_scalar(&count_query)
+    let total: i64 = match sqlx::query_scalar(&count_query)
         .fetch_one(&state.db)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    {
+        Ok(n) => n,
+        Err(err) => return db_internal_error("count filtered contracts", err).into_response(),
+    };
+
+    let paginated = PaginatedResponse::new(contracts, total, page, limit);
+
+    // link headers for pagination
+    let total_pages = paginated.total_pages;
+    let mut links: Vec<String> = Vec::new();
+
+    if page > 1 {
+        links.push(format!(
+            "</api/contracts?page={}&limit={}>; rel=\"prev\"",
+            page - 1,
+            limit
+        ));
+    }
+    if page < total_pages {
+        links.push(format!(
+            "</api/contracts?page={}&limit={}>; rel=\"next\"",
+            page + 1,
+            limit
+        ));
+    }
 
     Ok(Json(PaginatedResponse::new(
         contracts, total, page, page_size,
@@ -104,7 +204,13 @@ pub async fn get_contract(
         .bind(id)
         .fetch_one(&state.db)
         .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|err| match err {
+            sqlx::Error::RowNotFound => ApiError::not_found(
+                "ContractNotFound",
+                format!("No contract found with ID: {}", id),
+            ),
+            _ => db_internal_error("get contract by id", err),
+        })?;
 
     Ok(Json(contract))
 }
@@ -112,8 +218,15 @@ pub async fn get_contract(
 /// Get contract version history
 pub async fn get_contract_versions(
     State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> Result<Json<Vec<ContractVersion>>, StatusCode> {
+    Path(id): Path<String>,
+) -> ApiResult<Json<Vec<ContractVersion>>> {
+    let contract_uuid = Uuid::parse_str(&id).map_err(|_| {
+        ApiError::bad_request(
+            "InvalidContractId",
+            format!("Invalid contract ID format: {}", id),
+        )
+    })?;
+
     let versions: Vec<ContractVersion> = sqlx::query_as(
         "SELECT * FROM contract_versions WHERE contract_id = $1 ORDER BY created_at DESC",
     )
@@ -128,8 +241,10 @@ pub async fn get_contract_versions(
 /// Publish a new contract
 pub async fn publish_contract(
     State(state): State<AppState>,
-    Json(req): Json<PublishRequest>,
-) -> Result<Json<Contract>, StatusCode> {
+    payload: Result<Json<PublishRequest>, JsonRejection>,
+) -> ApiResult<Json<Contract>> {
+    let Json(req) = payload.map_err(map_json_rejection)?;
+
     // First, ensure publisher exists or create one
     let publisher: Publisher = sqlx::query_as(
         "INSERT INTO publishers (stellar_address) VALUES ($1)
@@ -148,19 +263,19 @@ pub async fn publish_contract(
     let contract: Contract = sqlx::query_as(
         "INSERT INTO contracts (contract_id, wasm_hash, name, description, publisher_id, network, category, tags)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING *"
+         RETURNING *",
     )
-        .bind(&req.contract_id)
-        .bind(&wasm_hash)
-        .bind(&req.name)
-        .bind(&req.description)
-        .bind(publisher.id)
-        .bind(&req.network)
-        .bind(&req.category)
-        .bind(&req.tags)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .bind(&req.contract_id)
+    .bind(&wasm_hash)
+    .bind(&req.name)
+    .bind(&req.description)
+    .bind(publisher.id)
+    .bind(&req.network)
+    .bind(&req.category)
+    .bind(&req.tags)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|err| db_internal_error("create contract", err))?;
 
     Ok(Json(contract))
 }
@@ -168,8 +283,10 @@ pub async fn publish_contract(
 /// Verify a contract
 pub async fn verify_contract(
     State(_state): State<AppState>,
-    Json(_req): Json<VerifyRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
+    payload: Result<Json<VerifyRequest>, JsonRejection>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let Json(_req) = payload.map_err(map_json_rejection)?;
+
     // TODO: Implement verification logic
     Ok(Json(serde_json::json!({
         "status": "pending",
@@ -180,8 +297,10 @@ pub async fn verify_contract(
 /// Create a publisher
 pub async fn create_publisher(
     State(state): State<AppState>,
-    Json(publisher): Json<Publisher>,
-) -> Result<Json<Publisher>, StatusCode> {
+    payload: Result<Json<Publisher>, JsonRejection>,
+) -> ApiResult<Json<Publisher>> {
+    let Json(publisher) = payload.map_err(map_json_rejection)?;
+
     let created: Publisher = sqlx::query_as(
         "INSERT INTO publishers (stellar_address, username, email, github_url, website)
          VALUES ($1, $2, $3, $4, $5)
@@ -208,7 +327,13 @@ pub async fn get_publisher(
         .bind(id)
         .fetch_one(&state.db)
         .await
-        .map_err(|_| StatusCode::NOT_FOUND)?;
+        .map_err(|err| match err {
+            sqlx::Error::RowNotFound => ApiError::not_found(
+                "PublisherNotFound",
+                format!("No publisher found with ID: {}", id),
+            ),
+            _ => db_internal_error("get publisher by id", err),
+        })?;
 
     Ok(Json(publisher))
 }
@@ -226,4 +351,9 @@ pub async fn get_publisher_contracts(
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(contracts))
+}
+
+/// Fallback endpoint for unknown routes
+pub async fn route_not_found() -> ApiError {
+    ApiError::not_found("RouteNotFound", "The requested endpoint does not exist")
 }

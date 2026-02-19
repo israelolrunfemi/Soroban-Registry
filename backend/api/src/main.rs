@@ -11,13 +11,14 @@ mod scoring;
 mod state;
 
 use anyhow::Result;
-use axum::Router;
+use axum::{middleware, Router};
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::rate_limit::RateLimitState;
 use crate::state::AppState;
 
 #[tokio::main]
@@ -51,6 +52,15 @@ async fn main() -> Result<()> {
 
     // Create app state
     let state = AppState::new(pool);
+    let rate_limit_state = RateLimitState::from_env();
+
+    let cors = CorsLayer::new()
+        .allow_origin([
+            HeaderValue::from_static("http://localhost:3000"),
+            HeaderValue::from_static("https://soroban-registry.vercel.app"),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     // Build router
     let app = Router::new()
@@ -60,6 +70,7 @@ async fn main() -> Result<()> {
         .merge(audit_routes::security_audit_routes())
         .merge(benchmark_routes::benchmark_routes())
         .layer(CorsLayer::permissive())
+        .layer(cors)
         .with_state(state);
 
     // Start server
@@ -67,7 +78,11 @@ async fn main() -> Result<()> {
     tracing::info!("API server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }
