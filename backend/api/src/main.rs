@@ -2,6 +2,12 @@ mod handlers;
 mod rate_limit;
 mod routes;
 mod state;
+mod checklist;
+mod detector;
+mod scoring;
+mod audit_handlers;
+mod audit_routes;
+
 
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
