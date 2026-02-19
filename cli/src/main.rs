@@ -3,7 +3,6 @@ mod config;
 mod export;
 mod import;
 mod manifest;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use config::Network;
@@ -14,7 +13,6 @@ const CLI_VERSION: &str = concat!(
     env!("RUSTC_VERSION"),
     ")"
 );
-
 #[derive(Parser)]
 #[command(name = "soroban-registry")]
 #[command(version = CLI_VERSION, long_version = CLI_VERSION)]
@@ -31,7 +29,6 @@ struct Cli {
     #[arg(long, global = true)]
     network: Option<String>,
 }
-
 #[derive(Subcommand)]
 enum Commands {
     /// Search for contracts
@@ -83,7 +80,21 @@ enum Commands {
         #[arg(long, default_value = "10")]
         limit: usize,
     },
-
+    /// Run a contract state migration
+    Migrate {
+        /// Contract ID
+        #[arg(long)]
+        contract_id: String,
+        /// Path to the migration WASM file
+        #[arg(long)]
+        wasm: String,
+        /// Simulates a failure for testing purposes
+        #[arg(long)]
+        simulate_fail: bool,
+        /// Dry run (do not execute)
+        #[arg(long)]
+        dry_run: bool,
+    },
     Export {
         id: String,
         #[arg(long, default_value = "contract.tar.gz")]
@@ -91,14 +102,12 @@ enum Commands {
         #[arg(long, default_value = ".")]
         contract_dir: String,
     },
-
     Import {
         archive: String,
         #[arg(long, default_value = "./imported")]
         output_dir: String,
     },
 }
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -124,7 +133,6 @@ async fn main() -> Result<()> {
             let tags_vec = tags
                 .map(|t| t.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_default();
-
             commands::publish(
                 &cli.api_url,
                 &contract_id,
@@ -140,6 +148,14 @@ async fn main() -> Result<()> {
         Commands::List { limit } => {
             commands::list(&cli.api_url, limit, network).await?;
         }
+        Commands::Migrate {
+            contract_id,
+            wasm,
+            simulate_fail,
+            dry_run,
+        } => {
+            commands::migrate(&cli.api_url, &contract_id, &wasm, simulate_fail, dry_run).await?;
+        }
         Commands::Export { id, output, contract_dir } => {
             commands::export(&cli.api_url, &id, &output, &contract_dir).await?;
         }
@@ -147,6 +163,6 @@ async fn main() -> Result<()> {
             commands::import(&cli.api_url, &archive, network, &output_dir).await?;
         }
     }
-
     Ok(())
+}
 }

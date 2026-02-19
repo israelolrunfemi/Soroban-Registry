@@ -145,8 +145,37 @@ impl<T> PaginatedResponse<T> {
             total,
             page,
             total_pages,
-        }
     }
+}
+}
+
+/// Migration status
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
+#[sqlx(type_name = "migration_status", rename_all = "snake_case")]
+pub enum MigrationStatus {
+    Pending,
+    Success,
+    Failed,
+    RolledBack,
+}
+
+/// Represents a contract state migration
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct Migration {
+    pub id: Uuid,
+    pub contract_id: String,
+    pub status: MigrationStatus,
+    pub wasm_hash: String,
+    pub log_output: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request to create a new migration record
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateMigrationRequest {
+    pub contract_id: String,
+    pub wasm_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
