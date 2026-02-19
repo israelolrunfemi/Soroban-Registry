@@ -5,7 +5,7 @@ mod state;
 
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
-use axum::Router;
+use axum::{Router, middleware};
 use dotenv::dotenv;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
         .merge(routes::publisher_routes())
         .merge(routes::health_routes())
         .fallback(handlers::route_not_found)
-        .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(request_logger))
         .layer(cors)
         .with_state(state);
 
@@ -73,4 +73,22 @@ async fn main() -> Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+async fn request_logger(
+    req: axum::http::Request<axum::body::Body>,
+    next: middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let start = std::time::Instant::now();
+
+    let response = next.run(req).await;
+
+    let elapsed = start.elapsed().as_millis();
+    let status = response.status().as_u16();
+
+    tracing::info!("{method} {uri} {status} {elapsed}ms");
+
+    response
 }
