@@ -777,6 +777,360 @@ pub struct ExportRequest {
     pub failures_only: bool,
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Resource kinds tracked by the planner
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// The on-chain or off-chain resource being forecast.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, sqlx::Type)]
+#[sqlx(type_name = "text", rename_all = "snake_case")]
+pub enum ResourceKind {
+    /// Ledger entries consumed by persistent/instance/temporary storage.
+    StorageEntries,
+    /// Estimated CPU instruction units per transaction.
+    CpuInstructions,
+    /// Total number of distinct users interacting with the contract.
+    UniqueUsers,
+    /// Daily transaction volume.
+    TransactionVolume,
+    /// WASM binary size in bytes.
+    WasmSizeBytes,
+    /// Network fee cost in stroops per operation.
+    FeePerOperation,
+}
+
+impl std::fmt::Display for ResourceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ResourceKind::StorageEntries    => "Storage Entries",
+            ResourceKind::CpuInstructions   => "CPU Instructions",
+            ResourceKind::UniqueUsers        => "Unique Users",
+            ResourceKind::TransactionVolume  => "Transaction Volume",
+            ResourceKind::WasmSizeBytes      => "WASM Size (bytes)",
+            ResourceKind::FeePerOperation    => "Fee per Operation",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Growth scenario
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One of three named growth curves used in scenario modelling.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum GrowthScenario {
+    /// Conservative: 10 % monthly growth.
+    Conservative,
+    /// Base: 25 % monthly growth (default).
+    Base,
+    /// Aggressive: 60 % monthly growth.
+    Aggressive,
+    /// Custom: caller supplies an explicit monthly growth rate (0.0–10.0 = 0%–1000%).
+    Custom { monthly_rate: f64 },
+}
+
+impl GrowthScenario {
+    /// Returns the monthly fractional growth rate (e.g. 0.25 = 25 % / month).
+    pub fn monthly_rate(&self) -> f64 {
+        match self {
+            GrowthScenario::Conservative         => 0.10,
+            GrowthScenario::Base                 => 0.25,
+            GrowthScenario::Aggressive           => 0.60,
+            GrowthScenario::Custom { monthly_rate } => monthly_rate.clamp(0.0, 10.0),
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            GrowthScenario::Conservative    => "conservative",
+            GrowthScenario::Base            => "base",
+            GrowthScenario::Aggressive      => "aggressive",
+            GrowthScenario::Custom { .. }   => "custom",
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Soroban resource limits (current network values, updated via config)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Hard limits enforced by the Soroban runtime / ledger.
+/// These are the values the planner checks forecasts against.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceLimits {
+    /// Max persistent storage entries per contract (ledger limit).
+    pub max_storage_entries: i64,
+    /// Max CPU instructions per transaction.
+    pub max_cpu_instructions: i64,
+    /// Max WASM binary size in bytes.
+    pub max_wasm_bytes: i64,
+    /// Max ledger entries read per transaction.
+    pub max_read_entries: i64,
+    /// Max ledger entries written per transaction.
+    pub max_write_entries: i64,
+}
+
+impl Default for ResourceLimits {
+    /// Soroban Mainnet limits as of early 2026.
+    fn default() -> Self {
+        ResourceLimits {
+            max_storage_entries:  100_000,
+            max_cpu_instructions: 100_000_000,
+            max_wasm_bytes:       65_536,
+            max_read_entries:     40,
+            max_write_entries:    25,
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DB row: raw resource snapshot
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One time-series data point recorded for a contract resource.
+/// Inserted whenever a benchmark, audit, or scheduled job captures metrics.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct ResourceSnapshot {
+    pub id:           Uuid,
+    pub contract_id:  Uuid,
+    pub resource:     ResourceKind,
+    /// Absolute value of the resource at `recorded_at`.
+    pub value:        f64,
+    /// Optional tag (e.g. contract version, benchmark run id).
+    pub tag:          Option<String>,
+    pub recorded_at:  DateTime<Utc>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Forecast output types
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// One point on a forecast curve.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ForecastPoint {
+    /// Months from now (0 = current).
+    pub month:           u32,
+    /// Absolute timestamp for this point.
+    pub at:              DateTime<Utc>,
+    /// Projected value of the resource.
+    pub projected_value: f64,
+    /// Percentage of the resource limit consumed (0–100+).
+    pub pct_of_limit:    f64,
+    /// True if this point exceeds the resource limit.
+    pub exceeds_limit:   bool,
+}
+
+/// A complete forecast for one resource under one growth scenario.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceForecast {
+    pub contract_id:       Uuid,
+    pub resource:          ResourceKind,
+    pub scenario:          String,
+    /// Monthly growth rate used (fractional, e.g. 0.25 = 25 %).
+    pub monthly_growth_rate: f64,
+    /// Current (baseline) value.
+    pub current_value:     f64,
+    /// The hard limit being tracked toward.
+    pub limit:             f64,
+    /// Forecast horizon in months.
+    pub horizon_months:    u32,
+    /// Month-by-month projection.
+    pub points:            Vec<ForecastPoint>,
+    /// `Some(n)` if limit is breached at month n, else `None`.
+    pub breach_at_month:   Option<u32>,
+    /// Absolute timestamp of predicted breach, if any.
+    pub breach_at:         Option<DateTime<Utc>>,
+    /// Days until breach (negative = already breached).
+    pub days_until_breach: Option<i64>,
+}
+
+/// Forecasts for all three standard scenarios for a single resource.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenarioBundle {
+    pub resource:      ResourceKind,
+    pub current_value: f64,
+    pub limit:         f64,
+    pub conservative:  ResourceForecast,
+    pub base:          ResourceForecast,
+    pub aggressive:    ResourceForecast,
+    /// Custom scenario, if requested.
+    pub custom:        Option<ResourceForecast>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Alert
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Severity of a capacity alert.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AlertSeverity {
+    /// > 60 % consumed but more than 30 days to breach.
+    Warning,
+    /// Breach predicted within 30 days.
+    Critical,
+    /// Limit already exceeded.
+    Breached,
+}
+
+impl std::fmt::Display for AlertSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertSeverity::Warning  => write!(f, "WARNING"),
+            AlertSeverity::Critical => write!(f, "CRITICAL"),
+            AlertSeverity::Breached => write!(f, "BREACHED"),
+        }
+    }
+}
+
+/// A capacity alert emitted when a resource is approaching or over its limit.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct CapacityAlert {
+    pub id:              Uuid,
+    pub contract_id:     Uuid,
+    pub resource:        ResourceKind,
+    pub severity:        String,      // stored as text; AlertSeverity for logic
+    pub current_value:   f64,
+    pub limit_value:     f64,
+    pub pct_consumed:    f64,
+    /// Predicted breach date under the base scenario.
+    pub breach_predicted_at: Option<DateTime<Utc>>,
+    pub days_until_breach:   Option<i64>,
+    pub message:             String,
+    pub acknowledged:        bool,
+    pub created_at:          DateTime<Utc>,
+    pub resolved_at:         Option<DateTime<Utc>>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Recommendation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Category of a scaling recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RecommendationKind {
+    StorageOptimization,
+    CodeOptimization,
+    ArchitectureChange,
+    ConfigurationTuning,
+    InfrastructureScaling,
+}
+
+impl std::fmt::Display for RecommendationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RecommendationKind::StorageOptimization    => "Storage Optimization",
+            RecommendationKind::CodeOptimization        => "Code Optimization",
+            RecommendationKind::ArchitectureChange      => "Architecture Change",
+            RecommendationKind::ConfigurationTuning     => "Configuration Tuning",
+            RecommendationKind::InfrastructureScaling   => "Infrastructure Scaling",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+/// Effort required to implement a recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ImplementationEffort {
+    Low,    // < 1 day
+    Medium, // 1–3 days
+    High,   // > 3 days
+}
+
+/// One actionable scaling recommendation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScalingRecommendation {
+    pub id:              Uuid,
+    pub contract_id:     Uuid,
+    pub resource:        ResourceKind,
+    pub kind:            RecommendationKind,
+    /// Short headline.
+    pub title:           String,
+    /// Full explanation of the problem and why this fixes it.
+    pub description:     String,
+    /// Step-by-step action the developer should take.
+    pub action:          String,
+    pub effort:          ImplementationEffort,
+    /// Estimated % reduction in resource usage after applying this.
+    pub estimated_savings_pct: f64,
+    pub priority:        u8,   // 1 = highest
+    pub created_at:      DateTime<Utc>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cost estimation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Cost estimate for a given resource level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CostEstimate {
+    pub resource:               ResourceKind,
+    pub current_monthly_xlm:    f64,
+    pub projected_monthly_xlm:  f64,  // at end of horizon under base scenario
+    pub projected_monthly_usd:  f64,  // at $0.12/XLM (configurable)
+    pub cost_per_unit_xlm:      f64,
+    pub units_at_horizon:       f64,
+    pub horizon_months:         u32,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Full capacity plan response
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Full response from GET /contracts/:id/capacity-plan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapacityPlanResponse {
+    pub contract_id:         Uuid,
+    pub generated_at:        DateTime<Utc>,
+    /// Per-resource scenario bundles (one per tracked ResourceKind).
+    pub scenarios:           Vec<ScenarioBundle>,
+    /// Active alerts (Warning / Critical / Breached).
+    pub alerts:              Vec<CapacityAlert>,
+    /// Ordered recommendations (priority 1 first).
+    pub recommendations:     Vec<ScalingRecommendation>,
+    /// Per-resource cost projections.
+    pub cost_estimates:      Vec<CostEstimate>,
+    /// Overall health: "healthy" | "warning" | "critical" | "breached"
+    pub overall_status:      String,
+    /// Days until the nearest breach across all resources and scenarios.
+    pub nearest_breach_days: Option<i64>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// API request shapes
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// POST /contracts/:id/resource-snapshots — record a new data point.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordSnapshotRequest {
+    pub resource: ResourceKind,
+    pub value:    f64,
+    pub tag:      Option<String>,
+}
+
+/// GET /contracts/:id/capacity-plan query params.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapacityPlanParams {
+    /// Forecast horizon in months (default 12, max 36).
+    #[serde(default = "default_horizon")]
+    pub horizon_months: u32,
+    /// Custom monthly growth rate for the custom scenario (optional).
+    pub custom_rate:    Option<f64>,
+    /// XLM/USD price for cost estimation (default 0.12).
+    #[serde(default = "default_xlm_price")]
+    pub xlm_usd:        f64,
+}
+
+fn default_horizon() -> u32  { 12 }
+fn default_xlm_price() -> f64 { 0.12 }
+
+/// PATCH /contracts/:id/capacity-alerts/:alert_id/acknowledge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AcknowledgeAlertRequest {
+    pub acknowledged_by: String,
+}
+
 fn default_true() -> bool {
     true
 }

@@ -11,7 +11,10 @@ mod scoring;
 mod state;
 mod quality_calculator;   
 mod quality_handlers;    
-mod quality_routes;      
+mod quality_routes;
+mod capacity_engine;
+mod capacity_handlers;
+mod capacity_routes;      
 
 use anyhow::Result;
 use axum::Router;
@@ -63,6 +66,7 @@ async fn main() -> Result<()> {
         .merge(audit_routes::security_audit_routes())
         .merge(benchmark_routes::benchmark_routes())
         .merge(quality_routes::quality_routes()) 
+        .merge(capacity_routes::capacity_router())
         .layer(CorsLayer::permissive())
         .with_state(state);
 
