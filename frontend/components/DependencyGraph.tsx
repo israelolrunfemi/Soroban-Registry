@@ -158,7 +158,10 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, DependencyGraphProps>(
           a.download = "dependency-graph.png";
           a.click();
         };
-        img.src = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(source)));
+        const utf8Bytes = new TextEncoder().encode(source);
+        const binaryString = utf8Bytes.reduce((data, byte) => data + String.fromCharCode(byte), "");
+        const base64Svg = btoa(binaryString);
+        img.src = "data:image/svg+xml;base64," + base64Svg;
       },
       panUp: () => panBy(0, -60),
       panDown: () => panBy(0, 60),
