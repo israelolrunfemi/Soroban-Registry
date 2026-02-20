@@ -300,7 +300,7 @@ export function GraphContent() {
                         </div>
                         <button
                             onClick={() => setSelectedNode(null)}
-                            className="text-gray-500 hover:text-gray-200 transition-colors shrink-0 p-1 rounded hover:bg-gray-800"
+                            className="text-gray-500 hover:text-gray-200 transition-colors shrink-0 p-1 rounded hover:bg-gray-800 focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
                             aria-label="Close panel"
                         >
                             <X className="w-4 h-4" />
