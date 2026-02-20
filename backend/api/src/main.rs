@@ -17,6 +17,7 @@ mod rate_limit;
 mod routes;
 mod scoring;
 mod state;
+mod health_monitor;
 
 use anyhow::Result;
 use axum::http::{header, HeaderValue, Method};
@@ -94,7 +95,10 @@ async fn main() -> Result<()> {
         ))
         .layer(CorsLayer::permissive())
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
+
+    // Spawn health monitor task
+    tokio::spawn(health_monitor::run_health_monitor(state));
 
     // Start server
     let addr = SocketAddr::from(([0, 0, 0, 0], 3001));
