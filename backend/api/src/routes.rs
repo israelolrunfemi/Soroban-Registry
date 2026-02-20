@@ -3,7 +3,7 @@ use axum::{
     Router,
 };
 
-use crate::{handlers, metrics_handler, state::AppState};
+use crate::{compatibility_handlers, handlers, metrics_handler, state::AppState};
 
 pub fn observability_routes() -> Router<AppState> {
     Router::new().route("/metrics", get(metrics_handler::metrics_endpoint))
@@ -12,6 +12,7 @@ pub fn observability_routes() -> Router<AppState> {
 pub fn contract_routes() -> Router<AppState> {
     Router::new()
         .route("/api/contracts", get(handlers::list_contracts))
+        .route("/api/contracts/graph", get(handlers::get_contract_graph))
         .route("/api/contracts", post(handlers::publish_contract))
         .route(
             "/api/contracts/trending",
@@ -27,6 +28,7 @@ pub fn contract_routes() -> Router<AppState> {
             "/api/contracts/:id/analytics",
             get(handlers::get_contract_analytics),
         )
+		  .route("/api/contracts/:id/trust-score", get(handlers::get_trust_score))
         .route(
             "/api/contracts/:id/dependencies",
             get(handlers::get_contract_dependencies),
@@ -58,6 +60,15 @@ pub fn contract_routes() -> Router<AppState> {
         .route(
             "/api/contracts/:id/performance",
             get(handlers::get_contract_performance),
+        )
+        .route(
+            "/api/contracts/:id/compatibility",
+            get(compatibility_handlers::get_contract_compatibility)
+                .post(compatibility_handlers::add_contract_compatibility),
+        )
+        .route(
+            "/api/contracts/:id/compatibility/export",
+            get(compatibility_handlers::export_contract_compatibility),
         )
 }
 
