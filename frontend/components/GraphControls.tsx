@@ -217,6 +217,7 @@ export default function GraphControls({
                         className="flex items-center gap-3 px-4 py-2.5 w-full hover:bg-gray-800/50 transition-colors"
                         aria-expanded={statsOpen}
                         aria-controls="graph-stats-body"
+                        aria-label="Toggle graph statistics panel"
                     >
                         <BarChart2 className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                         <div className="flex items-center gap-3 flex-1">
