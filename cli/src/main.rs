@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod events;
 mod export;
 mod fuzz;
 mod import;

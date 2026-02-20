@@ -24,6 +24,8 @@ mod contract_history_handlers;
 mod contract_history_routes;
 mod detector;
 mod error;
+mod event_handlers;
+mod event_routes;
 mod handlers;
 mod metrics;
 mod observability;
