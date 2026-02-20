@@ -3,7 +3,7 @@
 import {
     Search, ZoomIn, ZoomOut, Maximize2, Download, FileImage,
     GitBranch, Circle, Activity, Sparkles, ChevronUp, ChevronDown,
-    Keyboard
+    Keyboard, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 interface GraphControlsProps {
@@ -27,6 +27,10 @@ interface GraphControlsProps {
     onResetZoom: () => void;
     onExportSVG: () => void;
     onExportPNG: () => void;
+    onPanUp?: () => void;
+    onPanDown?: () => void;
+    onPanLeft?: () => void;
+    onPanRight?: () => void;
 }
 
 export default function GraphControls({
@@ -50,6 +54,10 @@ export default function GraphControls({
     onResetZoom,
     onExportSVG,
     onExportPNG,
+    onPanUp,
+    onPanDown,
+    onPanLeft,
+    onPanRight,
 }: GraphControlsProps) {
     return (
         <>
@@ -240,6 +248,56 @@ export default function GraphControls({
 
             {/* Bottom-right: Zoom + Export controls */}
             <div className="absolute bottom-4 right-4 z-30 flex flex-col gap-2">
+                {/* Pan d-pad */}
+                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden p-1">
+                    <div className="grid grid-cols-3 gap-0.5 w-[90px]">
+                        <div />
+                        <button
+                            id="graph-pan-up"
+                            onClick={onPanUp}
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
+                            title="Pan up"
+                        >
+                            <ChevronUp className="w-3.5 h-3.5" />
+                        </button>
+                        <div />
+                        <button
+                            id="graph-pan-left"
+                            onClick={onPanLeft}
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
+                            title="Pan left"
+                        >
+                            <ChevronLeft className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                            id="graph-reset-view"
+                            onClick={onResetZoom}
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
+                            title="Reset view"
+                        >
+                            <Maximize2 className="w-3 h-3" />
+                        </button>
+                        <button
+                            id="graph-pan-right"
+                            onClick={onPanRight}
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
+                            title="Pan right"
+                        >
+                            <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+                        <div />
+                        <button
+                            id="graph-pan-down"
+                            onClick={onPanDown}
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
+                            title="Pan down"
+                        >
+                            <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                        <div />
+                    </div>
+                </div>
+
                 {/* Zoom controls */}
                 <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden">
                     <button

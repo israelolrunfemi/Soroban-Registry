@@ -269,6 +269,10 @@ export function GraphContent() {
                 onResetZoom={() => graphRef.current?.resetZoom()}
                 onExportSVG={() => graphRef.current?.exportSVG()}
                 onExportPNG={() => graphRef.current?.exportPNG()}
+                onPanUp={() => graphRef.current?.panUp()}
+                onPanDown={() => graphRef.current?.panDown()}
+                onPanLeft={() => graphRef.current?.panLeft()}
+                onPanRight={() => graphRef.current?.panRight()}
             />
 
             {/* Selected Node Panel */}
