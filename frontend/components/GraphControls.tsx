@@ -65,20 +65,28 @@ export default function GraphControls({
     return (
         <>
             {/* Top-left: Search + Filters */}
-            <div className="absolute top-4 left-4 z-30 flex flex-col gap-3 max-w-xs">
+            <div className="absolute top-4 left-4 z-30 flex flex-col gap-3 max-w-xs" role="region" aria-label="Graph search and filters">
                 {/* Search */}
                 <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden">
                     <div className="relative flex items-center">
                         <Search className="absolute left-3 w-4 h-4 text-gray-500" />
                         <input
                             id="graph-search"
-                            type="text"
+                            type="search"
                             value={searchQuery}
                             onChange={(e) => onSearchChange(e.target.value)}
                             onKeyDown={(e) => { if (e.key === 'Enter' && searchMatchCount > 0) onNextMatch(); }}
                             placeholder="Search contracts…"
-                            className="w-full pl-9 pr-3 py-2.5 bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none"
+                            aria-label="Search graph nodes"
+                            aria-controls="graph-search-status"
+                            className="w-full pl-9 pr-3 py-2.5 bg-transparent text-sm text-white placeholder-gray-500 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 rounded"
                         />
+                        {/* Live region for search result announcement */}
+                        <span id="graph-search-status" aria-live="polite" className="sr-only">
+                            {searchQuery && searchMatchCount > 0
+                                ? `${searchMatchCount} match${searchMatchCount !== 1 ? "es" : ""} found, showing ${searchMatchIndex + 1}`
+                                : searchQuery && searchMatchCount === 0 ? "No matches found" : ""}
+                        </span>
                         {searchQuery && searchMatchCount > 0 && (
                             <div className="flex items-center gap-0.5 pr-1.5 shrink-0">
                                 <span className="text-xs text-gray-400 tabular-nums px-1">
@@ -86,14 +94,16 @@ export default function GraphControls({
                                 </span>
                                 <button
                                     onClick={onPrevMatch}
-                                    className="p-0.5 text-gray-400 hover:text-white transition-colors rounded"
+                                    className="p-0.5 text-gray-400 hover:text-white transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                                    aria-label="Previous search match"
                                     title="Previous match"
                                 >
                                     <ChevronUp className="w-3.5 h-3.5" />
                                 </button>
                                 <button
                                     onClick={onNextMatch}
-                                    className="p-0.5 text-gray-400 hover:text-white transition-colors rounded"
+                                    className="p-0.5 text-gray-400 hover:text-white transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                                    aria-label="Next search match"
                                     title="Next match"
                                 >
                                     <ChevronDown className="w-3.5 h-3.5" />
@@ -272,7 +282,7 @@ export default function GraphControls({
             </div>
 
             {/* Bottom-left: Keyboard shortcut hints */}
-            <div className="absolute bottom-4 left-4 z-30">
+            <div className="absolute bottom-4 left-4 z-30" role="complementary" aria-label="Keyboard shortcuts reference">
                 <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl p-3 shadow-2xl">
                     <div className="flex items-center gap-1.5 mb-2">
                         <Keyboard className="w-3 h-3 text-gray-400" />
@@ -308,16 +318,17 @@ export default function GraphControls({
             </div>
 
             {/* Bottom-right: Zoom + Export controls */}
-            <div className="absolute bottom-4 right-4 z-30 flex flex-col gap-2">
+            <div className="absolute bottom-4 right-4 z-30 flex flex-col gap-2" role="group" aria-label="Graph view controls">
                 {/* Pan d-pad */}
-                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden p-1">
+                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden p-1" role="group" aria-label="Pan controls">
                     <div className="grid grid-cols-3 gap-0.5 w-[90px]">
                         <div />
                         <button
                             id="graph-pan-up"
                             onClick={onPanUp}
-                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
-                            title="Pan up"
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                            aria-label="Pan up"
+                            title="Pan up (↑)"
                         >
                             <ChevronUp className="w-3.5 h-3.5" />
                         </button>
@@ -325,24 +336,27 @@ export default function GraphControls({
                         <button
                             id="graph-pan-left"
                             onClick={onPanLeft}
-                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
-                            title="Pan left"
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                            aria-label="Pan left"
+                            title="Pan left (←)"
                         >
                             <ChevronLeft className="w-3.5 h-3.5" />
                         </button>
                         <button
                             id="graph-reset-view"
                             onClick={onResetZoom}
-                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
-                            title="Reset view"
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                            aria-label="Reset view to fit all nodes"
+                            title="Reset view (R)"
                         >
                             <Maximize2 className="w-3 h-3" />
                         </button>
                         <button
                             id="graph-pan-right"
                             onClick={onPanRight}
-                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
-                            title="Pan right"
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                            aria-label="Pan right"
+                            title="Pan right (→)"
                         >
                             <ChevronRight className="w-3.5 h-3.5" />
                         </button>
@@ -350,8 +364,9 @@ export default function GraphControls({
                         <button
                             id="graph-pan-down"
                             onClick={onPanDown}
-                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded"
-                            title="Pan down"
+                            className="flex items-center justify-center h-7 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors rounded focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                            aria-label="Pan down"
+                            title="Pan down (↓)"
                         >
                             <ChevronDown className="w-3.5 h-3.5" />
                         </button>
@@ -360,50 +375,55 @@ export default function GraphControls({
                 </div>
 
                 {/* Zoom controls */}
-                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden">
+                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden" role="group" aria-label="Zoom controls">
                     <button
                         id="graph-zoom-in"
                         onClick={onZoomIn}
-                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                        title="Zoom in"
+                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                        aria-label="Zoom in (+ key)"
+                        title="Zoom in (+)"
                     >
                         <ZoomIn className="w-4 h-4" />
                     </button>
-                    <div className="border-t border-gray-800" />
+                    <div className="border-t border-gray-800" role="separator" />
                     <button
                         id="graph-zoom-out"
                         onClick={onZoomOut}
-                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                        title="Zoom out"
+                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                        aria-label="Zoom out (- key)"
+                        title="Zoom out (-)"
                     >
                         <ZoomOut className="w-4 h-4" />
                     </button>
-                    <div className="border-t border-gray-800" />
+                    <div className="border-t border-gray-800" role="separator" />
                     <button
                         id="graph-reset-zoom"
                         onClick={onResetZoom}
-                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
-                        title="Reset zoom"
+                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                        aria-label="Reset zoom (R key)"
+                        title="Reset zoom (R)"
                     >
                         <Maximize2 className="w-4 h-4" />
                     </button>
                 </div>
 
                 {/* Export controls */}
-                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden">
+                <div className="bg-gray-900/90 backdrop-blur-xl border border-gray-700/50 rounded-xl shadow-2xl overflow-hidden" role="group" aria-label="Export controls">
                     <button
                         id="graph-export-svg"
                         onClick={onExportSVG}
-                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                        aria-label="Export graph as SVG file"
                         title="Export as SVG"
                     >
                         <Download className="w-4 h-4" />
                     </button>
-                    <div className="border-t border-gray-800" />
+                    <div className="border-t border-gray-800" role="separator" />
                     <button
                         id="graph-export-png"
                         onClick={onExportPNG}
-                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors"
+                        className="flex items-center justify-center w-10 h-10 text-gray-400 hover:text-white hover:bg-gray-800 transition-colors focus-visible:ring-1 focus-visible:ring-blue-500 focus:outline-none"
+                        aria-label="Export graph as PNG image"
                         title="Export as PNG"
                     >
                         <FileImage className="w-4 h-4" />
