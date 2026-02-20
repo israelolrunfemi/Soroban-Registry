@@ -187,28 +187,20 @@ pub async fn publish(
             println!("{}", "Status: SUCCESS".green().bold());
         }
     }
-
-    Ok(())
 }
 
-pub async fn export(
-    api_url: &str,
-    contract_id: &str,
-    output: &str,
-    contract_dir: &str,
-) -> Result<()> {
-    println!("\n{}", "Exporting contract...".bold().cyan());
+impl FromStr for Network {
+    type Err = anyhow::Error;
 
-    let client = reqwest::Client::new();
-    let url = format!("{}/api/contracts/{}", api_url, contract_id);
-
-    let (name, network) = match client.get(&url).send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let data: serde_json::Value = resp.json().await?;
-            (
-                data["name"].as_str().unwrap_or(contract_id).to_string(),
-                data["network"].as_str().unwrap_or("unknown").to_string(),
-            )
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "mainnet" => Ok(Network::Mainnet),
+            "testnet" => Ok(Network::Testnet),
+            "futurenet" => Ok(Network::Futurenet),
+            _ => anyhow::bail!(
+                "Invalid network: {}. Allowed values: mainnet, testnet, futurenet",
+                s
+            ),
         }
         _ => (contract_id.to_string(), "unknown".to_string()),
     };

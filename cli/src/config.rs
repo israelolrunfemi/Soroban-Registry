@@ -130,50 +130,23 @@ pub fn edit_config() -> Result<()> {
         anyhow::bail!("Editor exited with non-zero status");
     }
 
-    Ok(())
-}
+    // 2. Config File
+    if let Some(config_path) = config_file_path() {
+        if config_path.exists() {
+            let content = fs::read_to_string(&config_path)
+                .with_context(|| format!("Failed to read config file at {:?}", config_path))?;
 
-fn ensure_config_file_exists(path: &Path) -> Result<()> {
-    if path.exists() {
-        return Ok(());
+            let config: ConfigFile =
+                toml::from_str(&content).with_context(|| "Failed to parse config file")?;
+
+            if let Some(net_str) = config.network {
+                return net_str.parse::<Network>();
+            }
+        }
     }
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).with_context(|| {
-            format!("Failed to create config directory at {}", parent.display())
-        })?;
-    }
-
-    fs::write(
-        path,
-        format!(
-            "[defaults]\nnetwork = \"testnet\"\napi_base = \"{}\"\ntimeout = {}\n",
-            DEFAULT_API_BASE, DEFAULT_TIMEOUT_SECS
-        ),
-    )
-    .with_context(|| format!("Failed to create default config file at {}", path.display()))?;
-
-    Ok(())
-}
-
-fn load_defaults_section() -> Result<DefaultsSection> {
-    let Some(path) = config_file_path() else {
-        return Ok(DefaultsSection::default());
-    };
-
-    if !path.exists() {
-        return Ok(DefaultsSection::default());
-    }
-
-    let config = load_config_file(&path)?;
-    Ok(config.defaults.unwrap_or_default())
-}
-
-fn load_config_file(path: &Path) -> Result<ConfigFile> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("Failed to read config file at {}", path.display()))?;
-
-    toml::from_str(&content).with_context(|| "Failed to parse config file")
+    // 3. Default
+    Ok(Network::Mainnet)
 }
 
 fn config_file_path() -> Option<PathBuf> {
