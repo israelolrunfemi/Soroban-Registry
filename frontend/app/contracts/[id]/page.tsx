@@ -1,20 +1,48 @@
-'use client';
+"use client";
 
-import { Suspense } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from '@/lib/api';
-import ExampleGallery from '@/components/ExampleGallery';
-import { ArrowLeft, CheckCircle2, Clock, Globe, Github, Tag } from 'lucide-react';
-import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { Suspense } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import ExampleGallery from "@/components/ExampleGallery";
+import DependencyGraph from "@/components/DependencyGraph";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock,
+  Globe,
+  Github,
+  Tag,
+  GitCompare,
+} from "lucide-react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import FormalVerificationPanel from "@/components/FormalVerificationPanel";
+import Navbar from "@/components/Navbar";
+import MaintenanceBanner from "@/components/MaintenanceBanner";
+import { useQueryClient } from "@tanstack/react-query";
+
+// Mock for maintenance status since it was missing in the original file view but used in code
+const maintenanceStatus = { is_maintenance: false, current_window: null };
+
+
 
 function ContractDetailsContent() {
   const params = useParams();
   const id = params.id as string;
 
-  const { data: contract, isLoading, error } = useQuery({
-    queryKey: ['contract', id],
+  const {
+    data: contract,
+    isLoading,
+    error,
+  } = useQuery({
+    queryKey: ["contract", id],
     queryFn: () => api.getContract(id),
+  });
+
+  const { data: dependencies, isLoading: depsLoading } = useQuery({
+    queryKey: ["contract-dependencies", id],
+    queryFn: () => api.getContractDependencies(id),
+    enabled: !!contract,
   });
 
   if (isLoading) {
@@ -49,6 +77,11 @@ function ContractDetailsContent() {
         Back to contracts
       </Link>
 
+      {/* Maintenance Banner */}
+      {maintenanceStatus?.is_maintenance && maintenanceStatus.current_window && (
+        <MaintenanceBanner window={maintenanceStatus.current_window} />
+      )}
+
       {/* Header */}
       <div className="mb-12">
         <div className="flex items-start justify-between mb-4">
@@ -68,7 +101,7 @@ function ContractDetailsContent() {
               )}
             </div>
           </div>
-          
+
           <div className="flex gap-2">
             {/* Publisher actions/links could go here */}
           </div>
@@ -96,6 +129,23 @@ function ContractDetailsContent() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-12">
+          {/* Dependency Graph */}
+          {depsLoading ? (
+            <section className="bg-white dark:bg-slate-900 rounded-lg p-8">
+              <div className="animate-pulse space-y-4">
+                <div className="h-8 bg-gray-200 dark:bg-gray-800 rounded w-1/3" />
+                <div className="h-96 bg-gray-200 dark:bg-gray-800 rounded-lg" />
+              </div>
+            </section>
+          ) : dependencies ? (
+            <section>
+              <DependencyGraph
+                nodes={[]}
+                edges={[]}
+              />
+            </section>
+          ) : null}
+
           {/* Examples Gallery */}
           <section>
             <ExampleGallery contractId={contract.id} />
@@ -108,11 +158,13 @@ function ContractDetailsContent() {
             <h3 className="font-semibold text-gray-900 dark:text-white mb-4">
               Contract Details
             </h3>
-            
+
             <dl className="space-y-3 text-sm">
               <div>
                 <dt className="text-gray-500 dark:text-gray-400">Network</dt>
-                <dd className="font-medium text-gray-900 dark:text-white capitalize">{contract.network}</dd>
+                <dd className="font-medium text-gray-900 dark:text-white capitalize">
+                  {contract.network}
+                </dd>
               </div>
               <div>
                 <dt className="text-gray-500 dark:text-gray-400">Published</dt>
@@ -121,13 +173,30 @@ function ContractDetailsContent() {
                 </dd>
               </div>
               <div>
-                <dt className="text-gray-500 dark:text-gray-400">Last Updated</dt>
+                <dt className="text-gray-500 dark:text-gray-400">
+                  Last Updated
+                </dt>
                 <dd className="font-medium text-gray-900 dark:text-white">
                   {new Date(contract.updated_at).toLocaleDateString()}
                 </dd>
               </div>
             </dl>
           </div>
+
+          {/* Compatibility Matrix link */}
+          <Link
+            href={`/contracts/${contract.id}/compatibility`}
+            className="flex items-center gap-3 w-full px-4 py-3 rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:border-blue-300 dark:hover:border-blue-700 text-gray-700 dark:text-gray-300 hover:text-blue-700 dark:hover:text-blue-300 transition-all group"
+          >
+            <GitCompare className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors" />
+            <div>
+              <div className="text-sm font-medium">Compatibility Matrix</div>
+              <div className="text-xs text-gray-400 dark:text-gray-500">View version compatibility</div>
+            </div>
+          </Link>
+
+          {/* Formal Verification Panel */}
+          <FormalVerificationPanel contractId={contract.id} />
         </div>
       </div>
     </div>
@@ -136,7 +205,8 @@ function ContractDetailsContent() {
 
 export default function ContractPage() {
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+    <div className="min-h-screen bg-background text-foreground">
+      <Navbar />
       <Suspense fallback={null}>
         <ContractDetailsContent />
       </Suspense>

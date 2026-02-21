@@ -1,12 +1,23 @@
-mod handlers;
-mod rate_limit;
 mod routes;
+mod handlers;
+mod error;
 mod state;
+mod rate_limit;
+mod aggregation;
+// mod auth;
+// mod auth_handlers;
+mod cache;
+mod metrics_handler;
+mod metrics;
+// mod resource_handlers;
+// mod resource_tracking;
+mod analytics;
 
 use anyhow::Result;
+use axum::{middleware, Router};
 use axum::http::{header, HeaderValue, Method};
-use axum::{Router, middleware};
 use dotenv::dotenv;
+use prometheus::Registry;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
@@ -44,8 +55,17 @@ async fn main() -> Result<()> {
 
     tracing::info!("Database connected and migrations applied");
 
+    // Spawn the hourly analytics aggregation background task
+    aggregation::spawn_aggregation_task(pool.clone());
+
+    // Create prometheus registry for metrics
+    let registry = Registry::new();
+    if let Err(e) = crate::metrics::register_all(&registry) {
+        tracing::error!("Failed to register metrics: {}", e);
+    }
+    
     // Create app state
-    let state = AppState::new(pool);
+    let state = AppState::new(pool, registry);
     let rate_limit_state = RateLimitState::from_env();
 
     let cors = CorsLayer::new()
@@ -88,18 +108,22 @@ async fn main() -> Result<()> {
 
 async fn request_logger(
     req: axum::http::Request<axum::body::Body>,
-    next: middleware::Next,
+    next: axum::middleware::Next,
 ) -> axum::response::Response {
+    let start = std::time::Instant::now();
     let method = req.method().clone();
     let uri = req.uri().clone();
-    let start = std::time::Instant::now();
 
-    let response = next.run(req).await;
+    let res = next.run(req).await;
+    let latency = start.elapsed();
 
-    let elapsed = start.elapsed().as_millis();
-    let status = response.status().as_u16();
+    tracing::debug!(
+        method = %method,
+        uri = %uri,
+        status = res.status().as_u16(),
+        latency = ?latency,
+        "request handled"
+    );
 
-    tracing::info!("{method} {uri} {status} {elapsed}ms");
-
-    response
+    res
 }
