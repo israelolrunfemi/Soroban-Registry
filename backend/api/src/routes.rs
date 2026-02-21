@@ -21,6 +21,14 @@ pub fn contract_routes() -> Router<AppState> {
         .route("/api/contracts/:id", get(handlers::get_contract))
         .route("/api/contracts/:id/abi", get(handlers::get_contract_abi))
         .route("/api/contracts/:id/versions", get(handlers::get_contract_versions))
+        .route(
+            "/api/contracts/:id/interactions",
+            get(handlers::get_contract_interactions).post(handlers::post_contract_interaction),
+        )
+        .route(
+            "/api/contracts/:id/interactions/batch",
+            post(handlers::post_contract_interactions_batch),
+        )
         .route("/api/contracts/:id/state/:key", get(handlers::get_contract_state).post(handlers::update_contract_state))
         .route("/api/contracts/:id/analytics", get(handlers::get_contract_analytics))
         .route("/api/contracts/:id/trust-score", get(handlers::get_trust_score))
