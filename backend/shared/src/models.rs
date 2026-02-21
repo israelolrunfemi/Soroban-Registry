@@ -1122,6 +1122,109 @@ pub struct CapacityPlanParams {
     pub xlm_usd:        f64,
 }
 
+
+/// A feature flag record as stored in Postgres.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FeatureFlag {
+    pub id:                 Uuid,
+    pub contract_id:        Uuid,
+    pub name:               String,
+    pub description:        String,
+    /// "inactive" | "active" | "sunset"
+    pub state:              String,
+    /// "full" | "gradual"
+    pub rollout_strategy:   String,
+    /// 0–100
+    pub rollout_percentage: i32,
+    pub sunset_at:          Option<DateTime<Utc>>,
+    pub created_by:         String,
+    pub ab_enabled:         bool,
+    pub created_at:         DateTime<Utc>,
+    pub updated_at:         DateTime<Utc>,
+}
+
+/// Cumulative analytics for one feature flag.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct FeatureFlagAnalytics {
+    pub id:                   Uuid,
+    pub flag_id:              Uuid,
+    pub total_checks:         i64,
+    pub enabled_hits:         i64,
+    pub disabled_hits:        i64,
+    /// Basis points: (enabled_hits * 10000 / total_checks). e.g. 7500 = 75.00%
+    pub hit_rate_bps:         i64,
+    pub first_check_at:       DateTime<Utc>,
+    pub last_check_at:        DateTime<Utc>,
+    /// Approximate count (incremented per check, not deduplicated).
+    pub unique_users_approx:  i64,
+}
+
+/// A/B test configuration for a flag.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AbTestConfig {
+    pub id:              Uuid,
+    pub contract_id:     Uuid,
+    pub flag_name:       String,
+    pub variant_a_pct:   i32,
+    pub variant_b_pct:   i32,
+    pub variant_a_label: String,
+    pub variant_b_label: String,
+    pub started_at:      DateTime<Utc>,
+    pub ends_at:         Option<DateTime<Utc>>,
+}
+
+// ─────────────────────────────────────────────────────────
+// API request / response shapes
+// ─────────────────────────────────────────────────────────
+
+/// POST /contracts/:id/feature-flags
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateFeatureFlagRequest {
+    pub name:               String,
+    pub description:        String,
+    /// Optional initial rollout percentage (default 100 = full).
+    pub rollout_percentage: Option<u32>,
+    /// Optional Unix timestamp (seconds) when the flag auto-sunsets.
+    pub sunset_at:          Option<DateTime<Utc>>,
+    /// Identifier of the person/system creating the flag.
+    pub created_by:         String,
+}
+
+/// PATCH /contracts/:id/feature-flags/:name/rollout
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRolloutRequest {
+    /// New rollout percentage (0–100).
+    pub percentage: u32,
+}
+
+/// POST /contracts/:id/feature-flags/:name/ab-test
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureAbTestRequest {
+    pub variant_a_pct:   u32,
+    pub variant_b_pct:   u32,
+    pub variant_a_label: String,
+    pub variant_b_label: String,
+    /// Optional end time for the A/B test.
+    pub ends_at:         Option<DateTime<Utc>>,
+}
+
+/// GET /contracts/:id/feature-flags/:name/check query params
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckEnabledParams {
+    /// Stellar address of the user being checked (for gradual rollout bucket).
+    pub user: Option<String>,
+}
+
+/// GET /contracts/:id/feature-flags response envelope
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureFlagListResponse {
+    pub contract_id:    Uuid,
+    pub flags:          Vec<FeatureFlag>,
+    pub active_count:   usize,
+    pub inactive_count: usize,
+    pub sunset_count:   usize,
+}
+
 fn default_horizon() -> u32  { 12 }
 fn default_xlm_price() -> f64 { 0.12 }
 

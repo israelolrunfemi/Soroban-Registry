@@ -14,17 +14,20 @@ mod quality_handlers;
 mod quality_routes;
 mod capacity_engine;
 mod capacity_handlers;
-mod capacity_routes;      
+mod capacity_routes;    
+mod feature_flag_handlers;
+mod feature_flag_routes;  
 
 use anyhow::Result;
 use axum::Router;
 use dotenv::dotenv;
+use shared::FeatureFlag;
 use sqlx::postgres::PgPoolOptions;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::state::AppState;
+use crate::{feature_flag_routes::feature_flag_router, state::AppState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
