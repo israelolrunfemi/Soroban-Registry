@@ -18,6 +18,8 @@ export interface Contract {
   tags: string[];
   popularity_score?: number;
   downloads?: number;
+  // Image fields for contract logo/icon
+  logo_url?: string;
   created_at: string;
   updated_at: string;
   is_maintenance?: boolean;
@@ -52,6 +54,8 @@ export interface Publisher {
   email?: string;
   github_url?: string;
   website?: string;
+  // Image fields for publisher avatar
+  avatar_url?: string;
   created_at: string;
 }
 
@@ -462,6 +466,8 @@ export interface Template {
   category: string;
   version: string;
   install_count: number;
+  // Image fields for template icon/thumbnail
+  thumbnail_url?: string;
   parameters: {
     name: string;
     type: string;
