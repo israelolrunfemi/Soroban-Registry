@@ -316,7 +316,17 @@ pub async fn create_contract_version(
     .bind(&req.release_notes)
     .fetch_one(&state.db)
     .await
-    .map_err(|err| db_internal_error("insert contract version", err))?;
+    .map_err(|err| match err {
+        sqlx::Error::Database(db_err)
+            if db_err.constraint() == Some("contract_versions_contract_id_version_key") =>
+        {
+            ApiError::unprocessable(
+                "VersionAlreadyExists",
+                format!("Version '{}' already exists for this contract", req.version),
+            )
+        }
+        _ => db_internal_error("insert contract version", err),
+    })?;
 
     let _ = sqlx::query(
         "INSERT INTO contract_abis (contract_id, version, abi) VALUES ($1, $2, $3) \
