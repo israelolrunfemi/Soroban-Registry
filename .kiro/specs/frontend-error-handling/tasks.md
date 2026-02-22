@@ -39,7 +39,7 @@
   - Test toast removal from state
   - _Requirements: 3.4_
 
-- [ ] 3. Create Error Boundary components
+- [x] 3. Create Error Boundary components
   - Implement ErrorBoundary class component in `frontend/components/ErrorBoundary.tsx`
   - Add getDerivedStateFromError and componentDidCatch lifecycle methods
   - Implement error logging to console with stack traces
