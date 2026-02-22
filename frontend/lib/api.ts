@@ -4,6 +4,13 @@ import {
   MOCK_VERSIONS,
   MOCK_TEMPLATES,
 } from "./mock-data";
+import { trackEvent } from "./analytics";
+import {
+  ApiError,
+  NetworkError,
+  extractErrorData,
+  createApiError,
+} from "./errors";
 
 export type Network = "mainnet" | "testnet" | "futurenet";
 
@@ -28,6 +35,8 @@ export interface Contract {
   tags: string[];
   popularity_score?: number;
   downloads?: number;
+  // Image fields for contract logo/icon
+  logo_url?: string;
   created_at: string;
   updated_at: string;
   is_maintenance?: boolean;
@@ -127,6 +136,8 @@ export interface Publisher {
   email?: string;
   github_url?: string;
   website?: string;
+  // Image fields for publisher avatar
+  avatar_url?: string;
   created_at: string;
 }
 
@@ -182,8 +193,110 @@ export interface PublishRequest {
   publisher_address: string;
 }
 
+export type CustomMetricType = 'counter' | 'gauge' | 'histogram';
+
+export interface MetricCatalogEntry {
+  metric_name: string;
+  metric_type: CustomMetricType;
+  last_seen: string;
+  sample_count: number;
+}
+
+export interface MetricSeriesPoint {
+  bucket_start: string;
+  bucket_end: string;
+  sample_count: number;
+  sum_value?: number;
+  avg_value?: number;
+  min_value?: number;
+  max_value?: number;
+  p50_value?: number;
+  p95_value?: number;
+  p99_value?: number;
+}
+
+export interface MetricSample {
+  timestamp: string;
+  value: number;
+  unit?: string;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface MetricSeriesResponse {
+  contract_id: string;
+  metric_name: string;
+  metric_type: CustomMetricType | null;
+  resolution: 'hour' | 'day' | 'raw';
+  points?: MetricSeriesPoint[];
+  samples?: MetricSample[];
+export type DeprecationStatus = 'active' | 'deprecated' | 'retired';
+
+export interface DeprecationInfo {
+  contract_id: string;
+  status: DeprecationStatus;
+  deprecated_at?: string | null;
+  retirement_at?: string | null;
+  replacement_contract_id?: string | null;
+  migration_guide_url?: string | null;
+  notes?: string | null;
+  days_remaining?: number | null;
+  dependents_notified: number;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 const USE_MOCKS = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+
+/**
+ * Wrapper for API calls with consistent error handling
+ */
+async function handleApiCall<T>(
+  apiCall: () => Promise<Response>,
+  endpoint: string
+): Promise<T> {
+  try {
+    const response = await apiCall();
+    
+    if (!response.ok) {
+      const errorData = await extractErrorData(response);
+      throw createApiError(response.status, errorData, endpoint);
+    }
+    
+    try {
+      return await response.json();
+    } catch (parseError) {
+      throw new ApiError(
+        'Failed to parse server response',
+        response.status,
+        parseError,
+        endpoint
+      );
+    }
+  } catch (error) {
+    // Re-throw if already an ApiError
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    
+    // Handle network errors
+    if (error instanceof TypeError) {
+      const message = error.message.toLowerCase();
+      if (message.includes('fetch') || message.includes('network') || message.includes('failed to fetch')) {
+        throw new NetworkError(
+          'Unable to connect to the server. Please check your internet connection.',
+          endpoint
+        );
+      }
+    }
+    
+    // Handle timeout errors
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new NetworkError('The request timed out. Please try again.', endpoint);
+    }
+    
+    // Unknown error
+    throw new ApiError('An unexpected error occurred', undefined, error, endpoint);
+  }
+}
 
 export const api = {
   // Contract endpoints
@@ -319,6 +432,10 @@ export const api = {
     if (params?.page_size)
       queryParams.append("page_size", String(params.page_size));
 
+    return handleApiCall<PaginatedResponse<Contract>>(
+      () => fetch(`${API_URL}/api/contracts?${queryParams}`),
+      '/api/contracts'
+    );
     const response = await fetch(`${API_URL}/api/contracts?${queryParams}`);
     if (!response.ok) throw new Error("Failed to fetch contracts");
     const data = await response.json();
@@ -345,11 +462,18 @@ export const api = {
       });
     }
 
+
+    return handleApiCall<Contract>(
+      () => fetch(`${API_URL}/api/contracts/${id}`),
+      `/api/contracts/${id}`
+    );
+
     const url = new URL(`${API_URL}/api/contracts/${id}`);
     if (network) url.searchParams.set("network", network);
     const response = await fetch(url.toString());
     if (!response.ok) throw new Error("Failed to fetch contract");
     return response.json();
+
   },
 
   async getContractExamples(id: string): Promise<ContractExample[]> {
@@ -361,9 +485,10 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}/examples`);
-    if (!response.ok) throw new Error("Failed to fetch contract examples");
-    return response.json();
+    return handleApiCall<ContractExample[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/examples`),
+      `/api/contracts/${id}/examples`
+    );
   },
 
   async rateExample(
@@ -385,13 +510,14 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/examples/${id}/rate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_address: userAddress, rating }),
-    });
-    if (!response.ok) throw new Error("Failed to rate example");
-    return response.json();
+    return handleApiCall<ExampleRating>(
+      () => fetch(`${API_URL}/api/examples/${id}/rate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_address: userAddress, rating }),
+      }),
+      `/api/examples/${id}/rate`
+    );
   },
 
   async getContractVersions(id: string): Promise<ContractVersion[]> {
@@ -403,15 +529,17 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}/versions`);
-    if (!response.ok) throw new Error("Failed to fetch contract versions");
-    return response.json();
+    return handleApiCall<ContractVersion[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/versions`),
+      `/api/contracts/${id}/versions`
+    );
   },
 
   async getContractDependencies(id: string): Promise<DependencyTreeNode[]> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/dependencies`);
-    if (!response.ok) throw new Error('Failed to fetch contract dependencies');
-    return response.json();
+    return handleApiCall<DependencyTreeNode[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/dependencies`),
+      `/api/contracts/${id}/dependencies`
+    );
   },
 
   async getContractInteractions(
@@ -441,43 +569,171 @@ export const api = {
 
   async publishContract(data: PublishRequest): Promise<Contract> {
     if (USE_MOCKS) {
+      if (typeof window !== "undefined") {
+        trackEvent("contract_publish_failed", {
+          network: data.network,
+          name: data.name,
+          reason: "mock_mode_not_supported",
+        });
+      }
       throw new Error("Publishing is not supported in mock mode");
     }
 
-    const response = await fetch(`${API_URL}/api/contracts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error("Failed to publish contract");
-    return response.json();
+    try {
+      const response = await fetch(`${API_URL}/api/contracts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) throw new Error("Failed to publish contract");
+
+      const published = await response.json();
+      if (typeof window !== "undefined") {
+        trackEvent("contract_published", {
+          contract_id: data.contract_id,
+          name: data.name,
+          network: data.network,
+          category: data.category,
+        });
+      }
+
+      return published;
+    } catch (error) {
+      if (typeof window !== "undefined") {
+        trackEvent("contract_publish_failed", {
+          contract_id: data.contract_id,
+          name: data.name,
+          network: data.network,
+        });
+      }
+      throw error;
+    }
+    return handleApiCall<Contract>(
+      () => fetch(`${API_URL}/api/contracts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+      '/api/contracts'
+    );
   },
 
   async getContractHealth(id: string): Promise<ContractHealth> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/health`);
-    if (!response.ok) throw new Error("Failed to fetch contract health");
-    return response.json();
+    return handleApiCall<ContractHealth>(
+      () => fetch(`${API_URL}/api/contracts/${id}/health`),
+      `/api/contracts/${id}/health`
+    );
+  },
+
+  async getDeprecationInfo(id: string): Promise<DeprecationInfo> {
+    if (USE_MOCKS) {
+      return Promise.resolve({
+        contract_id: id,
+        status: 'deprecated',
+        deprecated_at: new Date(Date.now() - 86400000 * 7).toISOString(),
+        retirement_at: new Date(Date.now() + 86400000 * 30).toISOString(),
+        replacement_contract_id: 'c2',
+        migration_guide_url: 'https://example.com/migration',
+        notes: 'This contract is being retired. Migrate to the new liquidity pool contract.',
+        days_remaining: 30,
+        dependents_notified: 4,
+      });
+    }
+
+    return handleApiCall<DeprecationInfo>(
+      () => fetch(`${API_URL}/api/contracts/${id}/deprecation-info`),
+      `/api/contracts/${id}/deprecation-info`
+    );
   },
 
   async getFormalVerificationResults(id: string): Promise<FormalVerificationReport[]> {
     if (USE_MOCKS) {
       return Promise.resolve([]);
     }
-    const response = await fetch(`${API_URL}/api/contracts/${id}/formal-verification`);
-    if (!response.ok) throw new Error('Failed to fetch formal verification results');
-    return response.json();
+    return handleApiCall<FormalVerificationReport[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/formal-verification`),
+      `/api/contracts/${id}/formal-verification`
+    );
   },
 
   async runFormalVerification(id: string, data: RunVerificationRequest): Promise<FormalVerificationReport> {
     if (USE_MOCKS) {
       throw new Error('Formal verification is not supported in mock mode');
     }
-    const response = await fetch(`${API_URL}/api/contracts/${id}/formal-verification`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to run formal verification');
+    return handleApiCall<FormalVerificationReport>(
+      () => fetch(`${API_URL}/api/contracts/${id}/formal-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+      `/api/contracts/${id}/formal-verification`
+    );
+  },
+
+  async getCustomMetricCatalog(id: string): Promise<MetricCatalogEntry[]> {
+    if (USE_MOCKS) {
+      return Promise.resolve([
+        {
+          metric_name: 'custom_trades_volume',
+          metric_type: 'counter',
+          last_seen: new Date().toISOString(),
+          sample_count: 128,
+        },
+        {
+          metric_name: 'custom_liquidity_depth',
+          metric_type: 'gauge',
+          last_seen: new Date().toISOString(),
+          sample_count: 72,
+        },
+      ]);
+    }
+
+    const response = await fetch(`${API_URL}/api/contracts/${id}/metrics/catalog`);
+    if (!response.ok) throw new Error('Failed to fetch metrics catalog');
+    return response.json();
+  },
+
+  async getCustomMetricSeries(
+    id: string,
+    metric: string,
+    options?: { resolution?: 'hour' | 'day' | 'raw'; from?: string; to?: string; limit?: number },
+  ): Promise<MetricSeriesResponse> {
+    if (USE_MOCKS) {
+      const now = Date.now();
+      const points = Array.from({ length: 24 }).map((_, idx) => {
+        const bucketStart = new Date(now - (23 - idx) * 3600_000).toISOString();
+        const bucketEnd = new Date(now - (22 - idx) * 3600_000).toISOString();
+        return {
+          bucket_start: bucketStart,
+          bucket_end: bucketEnd,
+          sample_count: 12,
+          avg_value: Math.random() * 1000,
+          p95_value: Math.random() * 1200,
+          max_value: Math.random() * 1500,
+          sum_value: Math.random() * 5000,
+        } satisfies MetricSeriesPoint;
+      });
+
+      return Promise.resolve({
+        contract_id: id,
+        metric_name: metric,
+        metric_type: 'counter',
+        resolution: options?.resolution ?? 'hour',
+        points,
+      });
+    }
+
+    const queryParams = new URLSearchParams();
+    queryParams.append('metric', metric);
+    if (options?.resolution) queryParams.append('resolution', options.resolution);
+    if (options?.from) queryParams.append('from', options.from);
+    if (options?.to) queryParams.append('to', options.to);
+    if (options?.limit) queryParams.append('limit', String(options.limit));
+
+    const response = await fetch(
+      `${API_URL}/api/contracts/${id}/metrics?${queryParams.toString()}`,
+    );
+    if (!response.ok) throw new Error('Failed to fetch metric series');
     return response.json();
   },
 
@@ -492,9 +748,10 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/publishers/${id}`);
-    if (!response.ok) throw new Error("Failed to fetch publisher");
-    return response.json();
+    return handleApiCall<Publisher>(
+      () => fetch(`${API_URL}/api/publishers/${id}`),
+      `/api/publishers/${id}`
+    );
   },
 
   async getPublisherContracts(id: string): Promise<Contract[]> {
@@ -504,9 +761,10 @@ export const api = {
       );
     }
 
-    const response = await fetch(`${API_URL}/api/publishers/${id}/contracts`);
-    if (!response.ok) throw new Error("Failed to fetch publisher contracts");
-    return response.json();
+    return handleApiCall<Contract[]>(
+      () => fetch(`${API_URL}/api/publishers/${id}/contracts`),
+      `/api/publishers/${id}/contracts`
+    );
   },
 
   async getStats(): Promise<{
@@ -522,26 +780,33 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/stats`);
-    if (!response.ok) throw new Error("Failed to fetch stats");
-    return response.json();
+    return handleApiCall<{
+      total_contracts: number;
+      verified_contracts: number;
+      total_publishers: number;
+    }>(
+      () => fetch(`${API_URL}/api/stats`),
+      '/api/stats'
+    );
   },
 
   // Compatibility endpoints
   async getCompatibility(id: string): Promise<CompatibilityMatrix> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/compatibility`);
-    if (!response.ok) throw new Error('Failed to fetch compatibility matrix');
-    return response.json();
+    return handleApiCall<CompatibilityMatrix>(
+      () => fetch(`${API_URL}/api/contracts/${id}/compatibility`),
+      `/api/contracts/${id}/compatibility`
+    );
   },
 
   async addCompatibility(id: string, data: AddCompatibilityRequest): Promise<unknown> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/compatibility`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to add compatibility entry');
-    return response.json();
+    return handleApiCall<unknown>(
+      () => fetch(`${API_URL}/api/contracts/${id}/compatibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+      `/api/contracts/${id}/compatibility`
+    );
   },
 
   getCompatibilityExportUrl(id: string, format: 'csv' | 'json'): string {
@@ -553,7 +818,14 @@ export const api = {
     const queryParams = new URLSearchParams();
     if (network) queryParams.append("network", network);
     const qs = queryParams.toString();
+    const response = await fetch(
+      `${API_URL}/api/contracts/graph${qs ? `?${qs}` : ""}`,
+    );
 
+    return handleApiCall<GraphResponse>(
+      () => fetch(`${API_URL}/api/contracts/graph${qs ? `?${qs}` : ""}`),
+      '/api/contracts/graph'
+    );
     const response = await fetch(`${API_URL}/api/contracts/graph${qs ? `?${qs}` : ""}`);
     if (!response.ok) throw new Error("Failed to fetch contract graph");
     const data = await response.json();
@@ -568,10 +840,10 @@ export const api = {
     if (USE_MOCKS) {
       return Promise.resolve([]);
     }
-    const response = await fetch(`${API_URL}/api/templates`);
-    if (!response.ok) throw new Error('Failed to fetch templates');
-
-    return response.json();
+    return handleApiCall<Template[]>(
+      () => fetch(`${API_URL}/api/templates`),
+      '/api/templates'
+    );
   },
 };
 
@@ -583,6 +855,8 @@ export interface Template {
   category: string;
   version: string;
   install_count: number;
+  // Image fields for template icon/thumbnail
+  thumbnail_url?: string;
   parameters: {
     name: string;
     type: string;

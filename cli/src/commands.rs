@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt;
@@ -96,6 +97,97 @@ pub async fn search(
     println!("Found {} contract(s)\n", items.len());
 
     Ok(())
+}
+
+/// Analyze two contract versions or schema files for breaking changes.
+pub async fn upgrade_analyze(api_url: &str, old_id: &str, new_id: &str, json_out: bool) -> Result<()> {
+    use reqwest::StatusCode;
+    use shared::upgrade::{compare_schemas, Schema};
+
+    // Helper to load schema from a local file
+    let try_load_file = |path: &str| -> Option<Schema> {
+        if std::path::Path::new(path).exists() {
+            let bytes = std::fs::read(path).ok()?;
+            Schema::from_json_bytes(&bytes).ok()
+        } else {
+            None
+        }
+    };
+
+    // If either argument is a local file, prefer file-based analysis
+    if let (Some(old_schema), Some(new_schema)) = (try_load_file(old_id), try_load_file(new_id)) {
+        let findings = compare_schemas(&old_schema, &new_schema);
+        if json_out {
+            println!("{}", serde_json::to_string_pretty(&findings)?);
+        } else {
+            for f in findings {
+                println!("[{:?}] {} - {}", f.severity, f.field.unwrap_or_default(), f.message);
+            }
+        }
+        return Ok(());
+    }
+
+    // Otherwise try to fetch versions from the API (assumes endpoint exists)
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/contract_versions/{}", api_url, old_id);
+    let old_res = client.get(&url).send().await.context("failed to fetch old version")?;
+    if old_res.status() == StatusCode::NOT_FOUND {
+        anyhow::bail!("Old version {} not found via API. Try passing a local schema JSON file instead.", old_id);
+    }
+    let old_json: serde_json::Value = old_res.json().await?;
+
+    let url2 = format!("{}/api/contract_versions/{}", api_url, new_id);
+    let new_res = client.get(&url2).send().await.context("failed to fetch new version")?;
+    if new_res.status() == StatusCode::NOT_FOUND {
+        anyhow::bail!("New version {} not found via API. Try passing a local schema JSON file instead.", new_id);
+    }
+    let new_json: serde_json::Value = new_res.json().await?;
+
+    // Expect the API to expose a simple schema JSON in `state_schema` field; fall back to error.
+    let old_schema_str = old_json["state_schema"].as_str().ok_or_else(|| anyhow::anyhow!("API did not return state_schema for old version"))?;
+    let new_schema_str = new_json["state_schema"].as_str().ok_or_else(|| anyhow::anyhow!("API did not return state_schema for new version"))?;
+
+    let old_schema = Schema::from_json_bytes(old_schema_str.as_bytes()).context("failed to parse old schema")?;
+    let new_schema = Schema::from_json_bytes(new_schema_str.as_bytes()).context("failed to parse new schema")?;
+
+    let findings = compare_schemas(&old_schema, &new_schema);
+    if json_out {
+        println!("{}", serde_json::to_string_pretty(&findings)?);
+    } else {
+        for f in findings {
+            println!("[{:?}] {} - {}", f.severity, f.field.unwrap_or_default(), f.message);
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn upgrade_analyze_with_local_files_returns_ok() {
+        let dir = tempdir().unwrap();
+        let old_path = dir.path().join("old_schema.json");
+        let new_path = dir.path().join("new_schema.json");
+
+        // Old schema with one field
+        let old_schema = r#"{ "fields": [ { "name": "count", "type": "u64" } ] }"#;
+        // New schema empty (removal -> error expected)
+        let new_schema = r#"{ "fields": [] }"#;
+
+        let mut f1 = std::fs::File::create(&old_path).unwrap();
+        write!(f1, "{}", old_schema).unwrap();
+        let mut f2 = std::fs::File::create(&new_path).unwrap();
+        write!(f2, "{}", new_schema).unwrap();
+
+        // Should return Ok() even if findings include errors; function prints results.
+        let res = upgrade_analyze("http://localhost:3001", old_path.to_str().unwrap(), new_path.to_str().unwrap(), true).await;
+        assert!(res.is_ok());
+    }
 }
 
 impl fmt::Display for Network {
@@ -255,6 +347,66 @@ pub async fn list(api_url: &str, limit: usize, network: Network, json: bool,) ->
 
     println!("\n{}", "=".repeat(80).cyan());
     println!();
+
+    Ok(())
+}
+
+pub async fn breaking_changes(api_url: &str, old_id: &str, new_id: &str, json: bool) -> Result<()> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/api/contracts/breaking-changes?old_id={}&new_id={}",
+        api_url, old_id, new_id
+    );
+
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .context("Failed to fetch breaking changes")?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await?;
+        anyhow::bail!("Failed to fetch breaking changes: {}", error_text);
+    }
+
+    let report: serde_json::Value = response.json().await?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    let breaking = report["breaking"].as_bool().unwrap_or(false);
+    let breaking_count = report["breaking_count"].as_u64().unwrap_or(0);
+    let non_breaking_count = report["non_breaking_count"].as_u64().unwrap_or(0);
+
+    let header = if breaking {
+        "Breaking changes detected".red().bold()
+    } else {
+        "No breaking changes detected".green().bold()
+    };
+
+    println!("\n{}", header);
+    println!(
+        "{} {} | {} {}",
+        "Breaking:".bold(),
+        breaking_count,
+        "Non-breaking:".bold(),
+        non_breaking_count
+    );
+
+    if let Some(changes) = report["changes"].as_array() {
+        for change in changes {
+            let severity = change["severity"].as_str().unwrap_or("unknown");
+            let message = change["message"].as_str().unwrap_or("Change");
+            let label = if severity == "breaking" {
+                "BREAKING".red().bold()
+            } else {
+                "INFO".yellow().bold()
+            };
+            println!("  {} {}", label, message);
+        }
+    }
 
     Ok(())
 }
