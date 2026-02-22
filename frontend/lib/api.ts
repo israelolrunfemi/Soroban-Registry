@@ -4,6 +4,12 @@ import {
   MOCK_VERSIONS,
   MOCK_TEMPLATES,
 } from "./mock-data";
+import {
+  ApiError,
+  NetworkError,
+  extractErrorData,
+  createApiError,
+} from "./errors";
 
 export interface Contract {
   id: string;
@@ -123,6 +129,58 @@ export interface DeprecationInfo {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 const USE_MOCKS = process.env.NEXT_PUBLIC_USE_MOCKS === "true";
+
+/**
+ * Wrapper for API calls with consistent error handling
+ */
+async function handleApiCall<T>(
+  apiCall: () => Promise<Response>,
+  endpoint: string
+): Promise<T> {
+  try {
+    const response = await apiCall();
+    
+    if (!response.ok) {
+      const errorData = await extractErrorData(response);
+      throw createApiError(response.status, errorData, endpoint);
+    }
+    
+    try {
+      return await response.json();
+    } catch (parseError) {
+      throw new ApiError(
+        'Failed to parse server response',
+        response.status,
+        parseError,
+        endpoint
+      );
+    }
+  } catch (error) {
+    // Re-throw if already an ApiError
+    if (error instanceof ApiError) {
+      throw error;
+    }
+    
+    // Handle network errors
+    if (error instanceof TypeError) {
+      const message = error.message.toLowerCase();
+      if (message.includes('fetch') || message.includes('network') || message.includes('failed to fetch')) {
+        throw new NetworkError(
+          'Unable to connect to the server. Please check your internet connection.',
+          endpoint
+        );
+      }
+    }
+    
+    // Handle timeout errors
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new NetworkError('The request timed out. Please try again.', endpoint);
+    }
+    
+    // Unknown error
+    throw new ApiError('An unexpected error occurred', undefined, error, endpoint);
+  }
+}
 
 export const api = {
   // Contract endpoints
@@ -249,9 +307,10 @@ export const api = {
     if (params?.page_size)
       queryParams.append("page_size", String(params.page_size));
 
-    const response = await fetch(`${API_URL}/api/contracts?${queryParams}`);
-    if (!response.ok) throw new Error("Failed to fetch contracts");
-    return response.json();
+    return handleApiCall<PaginatedResponse<Contract>>(
+      () => fetch(`${API_URL}/api/contracts?${queryParams}`),
+      '/api/contracts'
+    );
   },
 
   async getContract(id: string): Promise<Contract> {
@@ -270,9 +329,10 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}`);
-    if (!response.ok) throw new Error("Failed to fetch contract");
-    return response.json();
+    return handleApiCall<Contract>(
+      () => fetch(`${API_URL}/api/contracts/${id}`),
+      `/api/contracts/${id}`
+    );
   },
 
   async getContractExamples(id: string): Promise<ContractExample[]> {
@@ -284,9 +344,10 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}/examples`);
-    if (!response.ok) throw new Error("Failed to fetch contract examples");
-    return response.json();
+    return handleApiCall<ContractExample[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/examples`),
+      `/api/contracts/${id}/examples`
+    );
   },
 
   async rateExample(
@@ -308,13 +369,14 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/examples/${id}/rate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_address: userAddress, rating }),
-    });
-    if (!response.ok) throw new Error("Failed to rate example");
-    return response.json();
+    return handleApiCall<ExampleRating>(
+      () => fetch(`${API_URL}/api/examples/${id}/rate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_address: userAddress, rating }),
+      }),
+      `/api/examples/${id}/rate`
+    );
   },
 
   async getContractVersions(id: string): Promise<ContractVersion[]> {
@@ -326,15 +388,17 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}/versions`);
-    if (!response.ok) throw new Error("Failed to fetch contract versions");
-    return response.json();
+    return handleApiCall<ContractVersion[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/versions`),
+      `/api/contracts/${id}/versions`
+    );
   },
 
   async getContractDependencies(id: string): Promise<DependencyTreeNode[]> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/dependencies`);
-    if (!response.ok) throw new Error('Failed to fetch contract dependencies');
-    return response.json();
+    return handleApiCall<DependencyTreeNode[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/dependencies`),
+      `/api/contracts/${id}/dependencies`
+    );
   },
 
   async publishContract(data: PublishRequest): Promise<Contract> {
@@ -342,19 +406,21 @@ export const api = {
       throw new Error("Publishing is not supported in mock mode");
     }
 
-    const response = await fetch(`${API_URL}/api/contracts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error("Failed to publish contract");
-    return response.json();
+    return handleApiCall<Contract>(
+      () => fetch(`${API_URL}/api/contracts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }),
+      '/api/contracts'
+    );
   },
 
   async getContractHealth(id: string): Promise<ContractHealth> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/health`);
-    if (!response.ok) throw new Error("Failed to fetch contract health");
-    return response.json();
+    return handleApiCall<ContractHealth>(
+      () => fetch(`${API_URL}/api/contracts/${id}/health`),
+      `/api/contracts/${id}/health`
+    );
   },
 
   async getDeprecationInfo(id: string): Promise<DeprecationInfo> {
@@ -372,31 +438,34 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/contracts/${id}/deprecation-info`);
-    if (!response.ok) throw new Error('Failed to fetch deprecation info');
-    return response.json();
+    return handleApiCall<DeprecationInfo>(
+      () => fetch(`${API_URL}/api/contracts/${id}/deprecation-info`),
+      `/api/contracts/${id}/deprecation-info`
+    );
   },
 
   async getFormalVerificationResults(id: string): Promise<FormalVerificationReport[]> {
     if (USE_MOCKS) {
       return Promise.resolve([]);
     }
-    const response = await fetch(`${API_URL}/api/contracts/${id}/formal-verification`);
-    if (!response.ok) throw new Error('Failed to fetch formal verification results');
-    return response.json();
+    return handleApiCall<FormalVerificationReport[]>(
+      () => fetch(`${API_URL}/api/contracts/${id}/formal-verification`),
+      `/api/contracts/${id}/formal-verification`
+    );
   },
 
   async runFormalVerification(id: string, data: RunVerificationRequest): Promise<FormalVerificationReport> {
     if (USE_MOCKS) {
       throw new Error('Formal verification is not supported in mock mode');
     }
-    const response = await fetch(`${API_URL}/api/contracts/${id}/formal-verification`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to run formal verification');
-    return response.json();
+    return handleApiCall<FormalVerificationReport>(
+      () => fetch(`${API_URL}/api/contracts/${id}/formal-verification`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+      `/api/contracts/${id}/formal-verification`
+    );
   },
 
   // Publisher endpoints
@@ -410,9 +479,10 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/publishers/${id}`);
-    if (!response.ok) throw new Error("Failed to fetch publisher");
-    return response.json();
+    return handleApiCall<Publisher>(
+      () => fetch(`${API_URL}/api/publishers/${id}`),
+      `/api/publishers/${id}`
+    );
   },
 
   async getPublisherContracts(id: string): Promise<Contract[]> {
@@ -422,9 +492,10 @@ export const api = {
       );
     }
 
-    const response = await fetch(`${API_URL}/api/publishers/${id}/contracts`);
-    if (!response.ok) throw new Error("Failed to fetch publisher contracts");
-    return response.json();
+    return handleApiCall<Contract[]>(
+      () => fetch(`${API_URL}/api/publishers/${id}/contracts`),
+      `/api/publishers/${id}/contracts`
+    );
   },
 
   async getStats(): Promise<{
@@ -440,26 +511,33 @@ export const api = {
       });
     }
 
-    const response = await fetch(`${API_URL}/api/stats`);
-    if (!response.ok) throw new Error("Failed to fetch stats");
-    return response.json();
+    return handleApiCall<{
+      total_contracts: number;
+      verified_contracts: number;
+      total_publishers: number;
+    }>(
+      () => fetch(`${API_URL}/api/stats`),
+      '/api/stats'
+    );
   },
 
   // Compatibility endpoints
   async getCompatibility(id: string): Promise<CompatibilityMatrix> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/compatibility`);
-    if (!response.ok) throw new Error('Failed to fetch compatibility matrix');
-    return response.json();
+    return handleApiCall<CompatibilityMatrix>(
+      () => fetch(`${API_URL}/api/contracts/${id}/compatibility`),
+      `/api/contracts/${id}/compatibility`
+    );
   },
 
   async addCompatibility(id: string, data: AddCompatibilityRequest): Promise<unknown> {
-    const response = await fetch(`${API_URL}/api/contracts/${id}/compatibility`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to add compatibility entry');
-    return response.json();
+    return handleApiCall<unknown>(
+      () => fetch(`${API_URL}/api/contracts/${id}/compatibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }),
+      `/api/contracts/${id}/compatibility`
+    );
   },
 
   getCompatibilityExportUrl(id: string, format: 'csv' | 'json'): string {
@@ -472,19 +550,20 @@ export const api = {
     if (network) queryParams.append("network", network);
     const qs = queryParams.toString();
 
-    const response = await fetch(`${API_URL}/api/contracts/graph${qs ? `?${qs}` : ""}`);
-    if (!response.ok) throw new Error("Failed to fetch contract graph");
-    return response.json();
+    return handleApiCall<GraphResponse>(
+      () => fetch(`${API_URL}/api/contracts/graph${qs ? `?${qs}` : ""}`),
+      '/api/contracts/graph'
+    );
   },
 
   async getTemplates(): Promise<Template[]> {
     if (USE_MOCKS) {
       return Promise.resolve([]);
     }
-    const response = await fetch(`${API_URL}/api/templates`);
-    if (!response.ok) throw new Error('Failed to fetch templates');
-
-    return response.json();
+    return handleApiCall<Template[]>(
+      () => fetch(`${API_URL}/api/templates`),
+      '/api/templates'
+    );
   },
 };
 
