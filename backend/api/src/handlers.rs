@@ -10,11 +10,11 @@ use axum::{
 use serde_json::{json, Value};
 use shared::{
     Contract, ContractAnalyticsResponse, ContractGetResponse, ContractSearchParams,
-    ContractVersion, CreateContractVersionRequest, CreateInteractionBatchRequest, CreateInteractionRequest,
-    ContractInteractionResponse, DeploymentStats, InteractionsListResponse,
-    InteractionsQueryParams, InteractorStats, Network, NetworkConfig,
-    PaginatedResponse, PublishRequest, Publisher, TimelineEntry, TopUser,
-    SemVer,
+    ContractVersion, CreateContractVersionRequest, CreateInteractionBatchRequest,
+    CreateInteractionRequest, ContractInteractionResponse, DeploymentStats,
+    InteractionsListResponse, InteractionsQueryParams, InteractorStats, Network,
+    NetworkConfig, PaginatedResponse, PublishRequest, Publisher, SemVer,
+    TimelineEntry, TopUser,
 };
 use uuid::Uuid;
 

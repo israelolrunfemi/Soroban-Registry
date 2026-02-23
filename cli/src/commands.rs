@@ -1,10 +1,11 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fmt;
 use std::fs;
-use std::path::PathBuf;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,8 +19,6 @@ pub enum Network {
 use std::path::Path;
 
 use crate::patch::{PatchManager, Severity};
-use crate::profiler;
-use crate::sla::SlaManager;
 use crate::test_framework;
 
 pub async fn search(

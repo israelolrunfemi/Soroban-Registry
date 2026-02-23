@@ -1,3 +1,5 @@
+#![allow(unused_variables)]
+
 mod backup;
 mod commands;
 mod config;
@@ -9,6 +11,7 @@ mod formal_verification;
 mod fuzz;
 mod import;
 mod incident;
+mod io_utils;
 mod manifest;
 mod migration;
 mod multisig;

@@ -1,3 +1,5 @@
+#![allow(dead_code, unused)]
+
 mod routes;
 mod handlers;
 mod error;
