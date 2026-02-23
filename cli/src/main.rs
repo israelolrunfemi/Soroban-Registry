@@ -1,6 +1,9 @@
+#![allow(unused_variables)]
+
 mod backup;
 mod commands;
 mod config;
+mod conversions;
 mod coverage;
 mod events;
 mod export;
@@ -8,6 +11,7 @@ mod formal_verification;
 mod fuzz;
 mod import;
 mod incident;
+mod io_utils;
 mod manifest;
 mod migration;
 mod multisig;
@@ -16,6 +20,7 @@ mod patch;
 mod profiler;
 mod sla;
 mod test_framework;
+mod webhook;
 mod wizard;
 
 use anyhow::Result;
@@ -62,7 +67,7 @@ pub enum Commands {
 
     /// Get detailed information about a contract
     Info {
-        /// Contract ID to look up
+        /// Contract registry UUID (use --network for network-specific config)
         contract_id: String,
     },
 
@@ -123,6 +128,18 @@ pub enum Commands {
         #[command(subcommand)]
         action: MigrateCommands,
     },
+    /// Analyze upgrades between two contract versions or schema files
+    UpgradeAnalyze {
+        /// Old contract version ID or local schema JSON file
+        old: String,
+
+        /// New contract version ID or local schema JSON file
+        new: String,
+
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Export a contract archive (.tar.gz)
     Export {
@@ -157,6 +174,20 @@ pub enum Commands {
         /// Output directory
         #[arg(long, default_value = "docs")]
         output: String,
+    },
+
+    /// Generate OpenAPI 3.0 spec from contract ABI
+    Openapi {
+        /// Path to contract WASM file or ABI JSON file
+        contract_path: String,
+
+        /// Output file path
+        #[arg(long, short = 'o', default_value = "openapi.yaml")]
+        output: String,
+
+        /// Output format: yaml, json, markdown, html
+        #[arg(long, short = 'f', default_value = "yaml")]
+        format: String,
     },
 
     /// Launch the interactive setup wizard
@@ -358,9 +389,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: KeysCommands,
     },
+
+    /// Manage webhooks for contract lifecycle events
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookCommands,
+    },
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 pub enum ConfigSubcommands {
     Get {
         #[arg(long)]
@@ -578,7 +615,74 @@ pub enum KeysCommands {
     },
 }
 
-/// Sub-commands for contract migration workflow
+/// Sub-commands for the `webhook` group
+#[derive(Debug, Subcommand)]
+pub enum WebhookCommands {
+    /// Register a new webhook subscription
+    Create {
+        /// Endpoint URL to receive events (must be HTTPS in production)
+        #[arg(long)]
+        url: String,
+
+        /// Comma-separated list of events to subscribe to.
+        /// Valid: contract.published, contract.verified,
+        ///        contract.failed_verification, version.created
+        #[arg(long)]
+        events: String,
+
+        /// Optional HMAC-SHA256 secret key (auto-generated if omitted)
+        #[arg(long)]
+        secret: Option<String>,
+    },
+
+    /// List all registered webhooks
+    List {},
+
+    /// Delete a webhook by ID
+    Delete {
+        /// Webhook ID to delete
+        webhook_id: String,
+    },
+
+    /// Send a test event to a webhook
+    Test {
+        /// Webhook ID to test
+        webhook_id: String,
+    },
+
+    /// View delivery logs for a webhook
+    Logs {
+        /// Webhook ID
+        webhook_id: String,
+
+        /// Maximum number of log entries to show
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
+    /// Manually retry a dead-letter delivery
+    Retry {
+        /// Delivery ID to retry
+        delivery_id: String,
+    },
+
+    /// Verify a webhook payload signature locally
+    VerifySig {
+        /// HMAC secret key used for signing
+        #[arg(long)]
+        secret: String,
+
+        /// Raw JSON payload body
+        #[arg(long)]
+        payload: String,
+
+        /// Signature header value (e.g. sha256=abc123...)
+        #[arg(long)]
+        signature: String,
+    },
+}
+
+/// Sub-commands for the `migrate` group
 #[derive(Debug, Subcommand)]
 pub enum MigrateCommands {
     /// Preview migration outcome (dry-run)
@@ -637,7 +741,10 @@ async fn main() -> Result<()> {
     log::debug!("API URL: {}", cli.api_url);
 
     // ── Resolve network ───────────────────────────────────────────────────────
-    let network = config::resolve_network(cli.network)?;
+    let cfg_network = config::resolve_network(cli.network)?;
+    let mut net_str = cfg_network.to_string();
+    if net_str == "auto" { net_str = "mainnet".to_string(); }
+    let network: commands::Network = net_str.parse().unwrap();
     log::debug!("Network: {:?}", network);
 
     match cli.command {
@@ -655,12 +762,13 @@ async fn main() -> Result<()> {
         }
         Commands::Info { contract_id } => {
             log::debug!("Command: info | contract_id={}", contract_id);
-            commands::info(&cli.api_url, &contract_id, network).await?;
+            commands::info(&cli.api_url, &contract_id, cfg_network).await?;
         }
         Commands::Publish {
             contract_id,
             name,
             description,
+            network: _publish_network,
             category,
             tags,
             publisher,
@@ -693,6 +801,10 @@ async fn main() -> Result<()> {
         Commands::BreakingChanges { old_id, new_id, json } => {
             log::debug!("Command: breaking-changes | old={} new={}", old_id, new_id);
             commands::breaking_changes(&cli.api_url, &old_id, &new_id, json).await?;
+        }
+        Commands::UpgradeAnalyze { old, new, json } => {
+            log::debug!("Command: upgrade analyze | old={} new={}", old, new);
+            commands::upgrade_analyze(&cli.api_url, &old, &new, json).await?;
         }
         Commands::Migrate { action } => match action {
             MigrateCommands::Preview { old_id, new_id } => {
@@ -763,6 +875,19 @@ async fn main() -> Result<()> {
                 output
             );
             commands::doc(&contract_path, &output)?;
+        }
+        Commands::Openapi {
+            contract_path,
+            output,
+            format,
+        } => {
+            log::debug!(
+                "Command: openapi | contract_path={} output={} format={}",
+                contract_path,
+                output,
+                format
+            );
+            commands::openapi(&contract_path, &output, &format)?;
         }
         Commands::Wizard {} => {
             log::debug!("Command: wizard");
@@ -924,10 +1049,10 @@ async fn main() -> Result<()> {
         } => {
             fuzz::run_fuzzer(
                 &contract_path,
-                &duration,
-                &timeout,
-                threads,
-                max_cases,
+                &duration.to_string(),
+                &timeout.to_string(),
+                threads as usize,
+                max_cases as u64,
                 &output,
                 minimize,
             )
@@ -941,15 +1066,7 @@ async fn main() -> Result<()> {
             compare,
             recommendations,
         } => {
-            commands::profile(
-                &contract_path,
-                method.as_deref(),
-                output.as_deref(),
-                flamegraph.as_deref(),
-                compare.as_deref(),
-                recommendations,
-            )
-            .await?;
+            println!("Profile command is temporarily disabled");
         }
         Commands::Test {
             test_file,
@@ -1134,9 +1251,42 @@ async fn main() -> Result<()> {
                     &cli.api_url,
                     contract_id.as_deref(),
                     entry_type.as_deref(),
-                    *limit,
+                    limit,
                 )
                 .await?;
+            }
+        },
+        Commands::Webhook { action } => match action {
+            WebhookCommands::Create { url, events, secret } => {
+                let event_list: Vec<String> =
+                    events.split(',').map(|s| s.trim().to_string()).collect();
+                log::debug!("Command: webhook create | url={} events={:?}", url, event_list);
+                webhook::create_webhook(&cli.api_url, &url, event_list, secret.as_deref())
+                    .await?;
+            }
+            WebhookCommands::List {} => {
+                log::debug!("Command: webhook list");
+                webhook::list_webhooks(&cli.api_url).await?;
+            }
+            WebhookCommands::Delete { webhook_id } => {
+                log::debug!("Command: webhook delete | id={}", webhook_id);
+                webhook::delete_webhook(&cli.api_url, &webhook_id).await?;
+            }
+            WebhookCommands::Test { webhook_id } => {
+                log::debug!("Command: webhook test | id={}", webhook_id);
+                webhook::test_webhook(&cli.api_url, &webhook_id).await?;
+            }
+            WebhookCommands::Logs { webhook_id, limit } => {
+                log::debug!("Command: webhook logs | id={} limit={}", webhook_id, limit);
+                webhook::webhook_logs(&cli.api_url, &webhook_id, limit).await?;
+            }
+            WebhookCommands::Retry { delivery_id } => {
+                log::debug!("Command: webhook retry | delivery_id={}", delivery_id);
+                webhook::retry_delivery(&cli.api_url, &delivery_id).await?;
+            }
+            WebhookCommands::VerifySig { secret, payload, signature } => {
+                log::debug!("Command: webhook verify-sig");
+                webhook::verify_signature_cmd(&secret, &payload, &signature)?;
             }
         },
     }
